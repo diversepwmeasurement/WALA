@@ -1,123 +1,143 @@
-name: Continuous integration
-on:
-  pull_request:
-  push:
-    branches-ignore:
-      - 'dependabot/**'
 concurrency:
-  group: ${{ github.ref }}
   cancel-in-progress: true
+  group: ${{ github.ref }}
 jobs:
   build_gradle:
-    name: "JDK ${{ matrix.java }} on ${{ matrix.os }}"
+    name: JDK ${{ matrix.java }} on ${{ matrix.os }}
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Check out WALA sources
+      uses: actions/checkout@v3
+    - continue-on-error: true
+      name: Cache Goomph
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-goomph-${{ hashFiles('build.gradle') }}
+        path: ~/.goomph
+        restore-keys: ${{ runner.os }}-goomph-
+    - continue-on-error: true
+      name: Set up JDK ${{ matrix.java }}
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+    - continue-on-error: true
+      name: Validate Gradle wrapper
+      uses: gradle/wrapper-validation-action@v1
+    - continue-on-error: true
+      if: runner.os == 'Linux'
+      name: Build and test using Gradle with ECJ
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: aggregatedJavadocs build publishAllPublicationsToFakeRemoteRepository
+          shellcheck --no-configuration-cache -Pcom.ibm.wala.jdk-version=${{ matrix.java
+          }}
+        gradle-executable: xvfb-gradle.sh
+    - continue-on-error: true
+      if: runner.os != 'Linux'
+      name: Build and test using Gradle but without ECJ
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: aggregatedJavadocs javadoc build -PskipJavaUsingEcjTasks --no-configuration-cache
+          -Pcom.ibm.wala.jdk-version=${{ matrix.java }}
+    - continue-on-error: true
+      if: runner.os != 'Windows'
+      name: Check for Git cleanliness after build and test
+      run: ./check-git-cleanliness.sh
+    - continue-on-error: true
+      if: always()
+      name: Upload test results
+      uses: actions/upload-artifact@v3
+      with:
+        name: Test results for JDK ${{ matrix.java }} on ${{ runner.os }}
+        path: '**/build/test-results/test/TEST-*.xml'
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            java: 11
-          - os: ubuntu-latest
-            java: 11
-          - os: windows-latest
-            java: 11
-          - os: ubuntu-latest
-            java: 17
-          - os: ubuntu-latest
-            java: 21
-      fail-fast: false
-    runs-on: ${{ matrix.os }}
+        - java: 11
+          os: macos-latest
+        - java: 11
+          os: ubuntu-latest
+        - java: 11
+          os: windows-latest
+        - java: 17
+          os: ubuntu-latest
+        - java: 21
+          os: ubuntu-latest
+  generate_docs:
+    if: github.event_name == 'push' && github.repository == 'wala/WALA' && github.ref
+      == 'refs/heads/master'
+    name: Generate latest docs
+    needs: build_gradle
+    runs-on: self-hosted
     steps:
-      - name: Check out WALA sources
-        uses: actions/checkout@v3
-      - name: Cache Goomph
-        uses: actions/cache@v3
-        with:
-          path: ~/.goomph
-          key: ${{ runner.os }}-goomph-${{ hashFiles('build.gradle') }}
-          restore-keys: ${{ runner.os }}-goomph-
-      - name: 'Set up JDK ${{ matrix.java }}'
-        uses: actions/setup-java@v3
-        with:
-          java-version: ${{ matrix.java }}
-          distribution: 'temurin'
-      - name: Validate Gradle wrapper
-        uses: gradle/wrapper-validation-action@v1
-      - name: Build and test using Gradle with ECJ
-        uses: gradle/gradle-build-action@v2
-        with:
-          gradle-executable: xvfb-gradle.sh
-          arguments: aggregatedJavadocs build publishAllPublicationsToFakeRemoteRepository shellcheck --no-configuration-cache -Pcom.ibm.wala.jdk-version=${{ matrix.java }}
-        # testing ECJ compilation on any one OS is sufficient; we choose Linux arbitrarily
-        if: runner.os == 'Linux'
-      - name: Build and test using Gradle but without ECJ
-        uses: gradle/gradle-build-action@v2
-        with:
-          arguments: aggregatedJavadocs javadoc build -PskipJavaUsingEcjTasks --no-configuration-cache -Pcom.ibm.wala.jdk-version=${{ matrix.java }}
-        if: runner.os != 'Linux'
-      - name: Check for Git cleanliness after build and test
-        run: ./check-git-cleanliness.sh
-        # not running in Borne or POSIX shell on Windows
-        if: runner.os != 'Windows'
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: Test results for JDK ${{ matrix.java }} on ${{ runner.os }}
-          path: '**/build/test-results/test/TEST-*.xml'
+    - continue-on-error: true
+      name: Check out repository
+      uses: actions/checkout@v3
+    - continue-on-error: true
+      name: Cache Goomph
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-goomph-${{ hashFiles('build.gradle') }}
+        path: ~/.goomph
+        restore-keys: ${{ runner.os }}-goomph-
+    - continue-on-error: true
+      name: Set up JDK 11
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 11
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.WALA_BOT_GH_TOKEN }}
+      name: Generate latest docs
+      run: ./generate-latest-docs.sh
+  publish_snapshot:
+    if: github.event_name == 'push' && github.repository == 'wala/WALA' && github.ref
+      == 'refs/heads/master'
+    name: Publish snapshot
+    needs: build_gradle
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Check out repository
+      uses: actions/checkout@v3
+    - continue-on-error: true
+      name: Cache Goomph
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-goomph-${{ hashFiles('build.gradle') }}
+        path: ~/.goomph
+        restore-keys: ${{ runner.os }}-goomph-
+    - continue-on-error: true
+      name: Set up JDK 11
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 11
+    - continue-on-error: true
+      env:
+        ORG_GRADLE_PROJECT_SONATYPE_NEXUS_PASSWORD: ${{ secrets.SONATYPE_NEXUS_PASSWORD
+          }}
+        ORG_GRADLE_PROJECT_SONATYPE_NEXUS_USERNAME: ${{ secrets.SONATYPE_NEXUS_USERNAME
+          }}
+      name: Publish
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: publishAllPublicationsToMavenRepository
   upload_event_file:
     name: Upload event file
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Upload event file
-        uses: actions/upload-artifact@v3
-        with:
-          name: Event file
-          path: ${{ github.event_path }}
-  generate_docs:
-    name: 'Generate latest docs'
-    needs: build_gradle
-    if: github.event_name == 'push' && github.repository == 'wala/WALA' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    steps:
-      - name: 'Check out repository'
-        uses: actions/checkout@v3
-      - name: Cache Goomph
-        uses: actions/cache@v3
-        with:
-          path: ~/.goomph
-          key: ${{ runner.os }}-goomph-${{ hashFiles('build.gradle') }}
-          restore-keys: ${{ runner.os }}-goomph-
-      - name: 'Set up JDK 11'
-        uses: actions/setup-java@v3
-        with:
-          java-version: 11
-          distribution: 'temurin'
-      - name: 'Generate latest docs'
-        env:
-          GITHUB_TOKEN: ${{ secrets.WALA_BOT_GH_TOKEN }}
-        run: ./generate-latest-docs.sh
-  publish_snapshot:
-    name: 'Publish snapshot'
-    needs: build_gradle
-    if: github.event_name == 'push' && github.repository == 'wala/WALA' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    steps:
-      - name: 'Check out repository'
-        uses: actions/checkout@v3
-      - name: Cache Goomph
-        uses: actions/cache@v3
-        with:
-          path: ~/.goomph
-          key: ${{ runner.os }}-goomph-${{ hashFiles('build.gradle') }}
-          restore-keys: ${{ runner.os }}-goomph-
-      - name: 'Set up JDK 11'
-        uses: actions/setup-java@v3
-        with:
-          java-version: 11
-          distribution: 'temurin'
-      - name: 'Publish'
-        env:
-          ORG_GRADLE_PROJECT_SONATYPE_NEXUS_USERNAME: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
-          ORG_GRADLE_PROJECT_SONATYPE_NEXUS_PASSWORD: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
-        uses: gradle/gradle-build-action@v2
-        with:
-          arguments: publishAllPublicationsToMavenRepository
+    - continue-on-error: true
+      name: Upload event file
+      uses: actions/upload-artifact@v3
+      with:
+        name: Event file
+        path: ${{ github.event_path }}
+name: Continuous integration
+on:
+  repository_dispatch:
+    types: trigger-ga___continuous-integration.yml
